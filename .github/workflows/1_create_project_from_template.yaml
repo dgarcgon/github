@@ -1,0 +1,93 @@
+name: 1. Create Project From Templates
+on:
+  workflow_dispatch:
+    inputs:
+      PROJECT_CODE:
+        description: 'Project Code: (Example: demo)'
+        required: true
+        default: ""
+        type: text
+
+jobs:
+  format_prj_coode:
+    outputs:
+      prj_code_lower: ${{ steps.var.outputs.prj_code_lower}}
+      prj_code_upper: ${{ steps.var.outputs.prj_code_upper}}
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Setting prj code to lower
+        uses: actions/github-script@v6
+        id: var
+        with:
+          script: |
+            core.setOutput('prj_code_lower', '${{github.event.inputs.PROJECT_CODE }}'.toLowerCase().replaceAll(/[/.]/g, '-').trim('-'));
+            core.setOutput('prj_code_upper', '${{github.event.inputs.PROJECT_CODE }}'.toUpperCase().replaceAll(/[/.]/g, '-').trim('-'));     
+            
+  create-repositories:
+    needs: [format_prj_coode]
+    name: 'Creating new repositories'
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_CODE_UPPERCASE: ${{ needs.format_prj_coode.outputs.prj_code_upper }}
+    steps:
+    - name: Creating 
+      run: |
+         gh repo create ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-base --private --template ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-TEMPLATE-base
+         gh repo create ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-frontend-aks --private --template ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-TEMPLATE-frontend-aks
+         gh repo create ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-k8s --private --template ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-TEMPLATE-k8s
+      env:
+          GH_TOKEN: "${{ secrets.DYNAMICEPHEMERAL_WORKFLOW_TOKEN  }}"
+
+  grant-repositories-permissions:
+    needs: [create-repositories,format_prj_coode]
+    name: 'Granting permissions to repositories'
+    runs-on: ubuntu-latest  
+    env:
+      PROJECT_CODE_UPPERCASE: ${{ needs.format_prj_coode.outputs.prj_code_upper }}
+    steps:
+    - name: Creating 
+      run: |
+         gh api --method PUT -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-base/actions/permissions/access -f "access_level=organization"
+         gh api --method PUT -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-frontend-aks/actions/permissions/access -f "access_level=organization"
+         gh api --method PUT -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/ES-BAR-MEV/IDM-IAC-DYNAMIC-EPHEMERAL-${{ env.PROJECT_CODE_UPPERCASE}}-k8s/actions/permissions/access -f "access_level=organization"
+      env:
+          GH_TOKEN: "${{ secrets.DYNAMICEPHEMERAL_WORKFLOW_TOKEN  }}"
+
+  creating-deployments-workflow:
+    needs: [ grant-repositories-permissions, format_prj_coode]
+    name: 'Creating deployment workflow'
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_CODE_LOWERCASE: ${{ needs.format_prj_coode.outputs.prj_code_lower }}
+      PROJECT_CODE_UPPERCASE: ${{ needs.format_prj_coode.outputs.prj_code_upper }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.DYNAMICEPHEMERAL_WORKFLOW_TOKEN }}
+      - uses: nearform-actions/github-action-copy-files@v1.2.2
+        with:
+          source: ".github/workflows/TEMPLATE_DO_NOT_DELETE.yaml"
+          destination: "."
+          options: |
+            {
+              "overwrite": true,
+              "flat": false,
+              "rename": "${{ env.PROJECT_CODE_UPPERCASE}}_configure_and_create_project.yaml"
+            }
+      - name: Inject variables
+        run: |
+          sed -i "s#OWN_VAR_TEMPLATE_PROJECT_CODE_UPPERCASE#${{ env.PROJECT_CODE_UPPERCASE}}#g" .github/workflows/${{ env.PROJECT_CODE_UPPERCASE}}_configure_and_create_project.yaml
+          sed -i "s#OWN_VAR_TEMPLATE_PROJECT_CODE_LOWERCASE#${{ env.PROJECT_CODE_LOWERCASE}}#g" .github/workflows/${{ env.PROJECT_CODE_UPPERCASE}}_configure_and_create_project.yaml
+
+      - name: Generating params file
+        run: |
+           chmod 755 params/find_next_conf.sh; params/find_next_conf.sh in ${{ env.PROJECT_CODE_UPPERCASE}}
+        
+      - name: update file and push to remote
+        run: |
+          git config --global user.name "Configure Project"
+          git config --global user.email "configure.project@atos.net"
+          git add -A
+          git commit -m "Confirmation of project configuration"
+          git push
